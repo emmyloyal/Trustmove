@@ -82,21 +82,15 @@ describe.skipIf(!localChainAvailable())('StockRun server', () => {
     expect((await bisi.call('/api/me/profile', { username: 'ADA' })).status).toBe(409);
   }, 60_000);
 
-  it('wallet sign-in creates an account; an email account connects a wallet and then signs in with either', async () => {
+  it('naira only: there is no wallet sign-in, wallet connection or coins', async () => {
     const w = privateKeyToAccount(generatePrivateKey());
     const tobi = person();
-    const { message } = (await tobi.call(`/api/auth/wallet-message?address=${w.address}`)).json;
-    const s = await tobi.call('/api/auth/wallet', { message, signature: await w.signMessage({ message }) });
-    expect(s.json.user).toMatchObject({ wallet: w.address, email: null });
-    expect((await tobi.call('/api/me/coins')).json).toMatchObject({ wallet: w.address, okb: '0' });
-
-    const kemi = person(); const k = await kemi.email('kemi@example.com');
-    const kw = privateKeyToAccount(generatePrivateKey());
-    const m2 = (await kemi.call(`/api/auth/wallet-message?address=${kw.address}`)).json.message;
-    expect((await kemi.call('/api/me/wallet', { message: m2, signature: await kw.signMessage({ message: m2 }) })).json.user).toMatchObject({ email: 'kemi@example.com', wallet: kw.address });
-    const again = person();
-    const m3 = (await again.call(`/api/auth/wallet-message?address=${kw.address}`)).json.message;
-    expect((await again.call('/api/auth/wallet', { message: m3, signature: await kw.signMessage({ message: m3 }) })).json.user.id).toBe(k.json.user.id);
+    expect((await tobi.call(`/api/auth/wallet-message?address=${w.address}`)).status).toBe(404);
+    expect((await tobi.call('/api/auth/wallet', { message: 'x', signature: '0x' })).status).toBe(404);
+    await tobi.email('tobi@example.com');
+    expect((await tobi.call('/api/me/wallet', { message: 'x', signature: '0x' })).status).toBe(404);
+    expect((await tobi.call('/api/me/coins')).status).toBe(404);
+    expect((await tobi.call('/api/config')).json.coins).toBeUndefined();
   }, 60_000);
 
   it('ask with a budget and a pin; collect it yourself; your count pays the seller; the rest comes back', async () => {

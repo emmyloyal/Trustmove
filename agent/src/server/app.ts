@@ -1,4 +1,4 @@
-// StockRun HTTP server: anyone in Nigeria signs in (phone code or wallet), keeps a profile, deposits naira (Paystack)
+// StockRun HTTP server: anyone in Nigeria signs in (email code), keeps a profile, deposits naira (Paystack)
 // and asks the agent for what they want with a budget and a delivery pin.
 // - Sessions: HttpOnly cookie on the same origin, or a bearer token for the app hosted elsewhere (DeWEB).
 //   Every write must be JSON (with SameSite=Lax cookies that stops other websites posting for a signed-in person).
@@ -7,13 +7,13 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { extname, join, normalize } from 'node:path';
-import { formatEther, type Hex } from 'viem';
+
 import { STATUS, type CheckResult } from '../check/checkService.ts';
 import { haversineKm, loadSuppliers, supplierKey } from '../tools/suppliers.ts';
 import { ageText, type PriceBook } from '../prices/priceBook.ts';
 import { Accounts, AuthError, type User } from '../accounts/accounts.ts';
 import { IN_NIGERIA, type Buyers } from '../buyers/buyers.ts';
-import { tokenAbi, type Platform } from '../chain/platform.ts';
+import type { Platform } from '../chain/platform.ts';
 import { verifySendrelayWebhook } from '../logistics/sendrelay.ts';
 import { kobo, toNaira, LedgerError, type Ledger } from '../money/ledger.ts';
 import { PaystackError, depositCharge, type Paystack } from '../money/paystack.ts';
@@ -30,8 +30,6 @@ import { PostError, type Posts } from '../business/posts.ts';
 import { createHmac, timingSafeEqual as safeEqual } from 'node:crypto';
 import { draftMessage, whatsappLink } from '../discovery/draft.ts';
 import { PICKUP_REASONS, DELIVERY_REASONS } from '../check/checkService.ts';
-import type { CoinOrders } from '../coins/coinOrders.ts';
-import { BaseError } from 'viem';
 
 export interface AppOptions {
   platform: Platform;
@@ -55,8 +53,6 @@ export interface AppOptions {
   listings?: Listings | null;
   /** In-app chat between buyers and registered stores. */
   chats?: Chats | null;
-  /** Coin orders through each buyer's own vault on X Layer (null: coins are read-only). */
-  coins?: CoinOrders | null;
   /** Store posts and the buyers' feed (needs registered stores). */
   posts?: Posts | null;
   /** Buyer withdrawals to their bank (Paystack Transfers); absent: off. */
@@ -117,7 +113,7 @@ export function createApp(o: AppOptions): Server {
   const sweepPayouts = () => { o.payouts?.sweep().catch((e) => log(`payout sweep: ${(e as Error).message}`)); };
   const signedIn = (res: ServerResponse, r: { user: User; token: string }) => {
     res.setHeader('Set-Cookie', cookie(r.token, 365 * 24 * 3600, o.secureCookies));   // signed in for a year on this device
-    log(`signed in: user ${r.user.id} (${r.user.phone ? 'phone' : r.user.email ? 'email' : 'wallet'})`);
+    log(`signed in: user ${r.user.id} (${r.user.phone ? 'phone' : 'email'})`);
     return { user: r.user, token: r.token };   // the token is for apps on another origin (DeWEB): `Authorization: Bearer`
   };
   const money = (userId: number) => { const b = ledger.balance(userId); return { availableNaira: toNaira(b.availableKobo), heldNaira: toNaira(b.heldKobo) }; };
@@ -125,12 +121,7 @@ export function createApp(o: AppOptions): Server {
     try { return await f(); }
     catch (e) { if (e instanceof LedgerError || e instanceof PaystackError) throw new AuthError(e.status, e.message); throw e; }
   };
-  /** Chain calls: a failed transaction or RPC becomes a plain 502 for the buyer; nothing moved. */
-  const onChain = async <T>(f: () => Promise<T>): Promise<T> => {
-    try { return await f(); }
-    catch (e) { if (e instanceof BaseError) throw new AuthError(502, `X Layer refused or did not answer (${e.shortMessage}). Nothing moved; try again.`); throw e; }
-  };
-  const coins = () => { if (!o.coins) throw new AuthError(404, 'Coin payments are not switched on here.'); return o.coins; };
+
 
   function orderView(userId: number, orderId: string) {
     const rt = buyers.runtime(userId), job = rt.jobs.get(orderId), r = buyers.orders.get(orderId);
@@ -165,8 +156,6 @@ export function createApp(o: AppOptions): Server {
       return { sent: true };
     }],
     ['POST', /^\/api\/auth\/email-verify$/, async (c, res) => signedIn(res, accounts.verifyEmailCode(String(c.body?.email ?? ''), String(c.body?.code ?? '')))],
-    ['GET', /^\/api\/auth\/wallet-message$/, async (c) => accounts.walletChallenge(c.url.searchParams.get('address') ?? '')],
-    ['POST', /^\/api\/auth\/wallet$/, async (c, res) => signedIn(res, await accounts.verifyWallet(String(c.body?.message ?? ''), String(c.body?.signature ?? '0x') as Hex))],
     ['POST', /^\/api\/auth\/logout$/, async (c, res) => {
       if (c.token) accounts.signOut(c.token);
       res.setHeader('Set-Cookie', cookie('', 0, o.secureCookies));
@@ -180,7 +169,6 @@ export function createApp(o: AppOptions): Server {
         fee: { percent: buyers.orders.fee.bps / 100, minNaira: buyers.orders.fee.minKobo / 100, maxNaira: buyers.orders.fee.maxKobo / 100 } },
       logistics: p.carriers.map((x) => ({ id: x.id, name: x.name, api: !!x.connector })),
       emailSignIn: accounts.emailSignIn,
-      coins: o.coins ? { cap: Number(o.coins.cap.tokens) / 1e6, capNaira: o.coins.cap.naira, symbol: p.tokenSymbol, token: p.token, chainId: p.chain.id, payout: p.supplierPayout } : null,
       supportEmail: o.supportEmail ?? null,
       sellerHunt: !!o.hunt && huntEnabled(o.hunt),
       chat: !!o.chats,
@@ -194,18 +182,6 @@ export function createApp(o: AppOptions): Server {
       const u = need(c);
       if (typeof c.body?.data !== 'string') throw new AuthError(400, 'Send the picture as base64.');
       return { user: accounts.setAvatar(u, Buffer.from(c.body.data, 'base64'), String(c.body?.mediaType ?? '')) };
-    }],
-    ['POST', /^\/api\/me\/wallet$/, async (c) => ({ user: await accounts.addWallet(need(c), String(c.body?.message ?? ''), String(c.body?.signature ?? '0x') as Hex) })],
-    /** Coins in the connected wallet on X Layer (read from the chain; StockRun never holds them). */
-    ['GET', /^\/api\/me\/coins$/, async (c) => {
-      const u = need(c);
-      if (!u.wallet) return { wallet: null };
-      const [okb, token] = await Promise.all([
-        p.pub.getBalance({ address: u.wallet }),
-        p.pub.readContract({ address: p.token, abi: tokenAbi, functionName: 'balanceOf', args: [u.wallet] }),
-      ]);
-      const vault = o.coins ? await o.coins.status(u).catch(() => null) : null;
-      return { wallet: u.wallet, network: p.name, vault, okb: formatEther(okb), token: { symbol: p.tokenSymbol, amount: p.money.toNaira(token) === 0 ? '0' : String(Number(token) / 1e6), naira: p.money.toNaira(token) } };
     }],
     ['GET', /^\/api\/users\/(\d+)$/, async (c) => {
       const prof = accounts.publicProfile(Number(c.m[1]));
@@ -243,26 +219,9 @@ export function createApp(o: AppOptions): Server {
     ['GET', /^\/api\/orders$/, async (c) => {
       const u = need(c), rt = buyers.runtime(u.id);
       await buyers.dispatcher.bookPending(rt.dispatch).catch(() => {});   // e.g. an order the buyer just approved
-      const naira = rt.jobs.all().map((j) => orderView(u.id, j.orderId)).filter((x): x is NonNullable<typeof x> => !!x);
-      const coin = o.coins ? await o.coins.list(u).catch(() => []) : [];
-      return [...naira, ...coin].sort((a, b) => b.createdAt - a.createdAt);
+      return rt.jobs.all().sort((a, b) => b.createdAt - a.createdAt).map((j) => orderView(u.id, j.orderId)).filter(Boolean);
     }],
 
-    // ---------------------------------------------------------------- coins: the buyer's own vault on X Layer
-    /** Deploy the buyer's vault, owned by their connected wallet (StockRun pays the gas). */
-    ['POST', /^\/api\/coins\/vault$/, async (c) => onChain(() => coins().setUp(need(c)))],
-    /** A deal paid with coins: self-pickup, decided by RestockGuard inside the buyer's vault. */
-    ['POST', /^\/api\/coins\/deals$/, async (c) => {
-      const u = need(c), d = buyers.parseDeal(u, { ...(c.body ?? {}), delivery: 'self' });
-      const r = await onChain(() => coins().recordDeal(u, d));
-      o.activity?.record(u.id, d.s.id, 'recorded_deal', `${d.quantity} ${d.unit} ${d.item} at ₦${d.price.toLocaleString('en-NG')} in coins: ${r.status}${'orderId' in r && r.orderId ? ` (order ${r.orderId})` : ''}`);
-      return r;
-    }],
-    /** After the buyer's wallet signed their count: PickupCheck pays the counted goods through the vault. */
-    ['POST', /^\/api\/coins\/orders\/(\d+)\/settle-pickup$/, async (c) => {
-      const r = await onChain(() => coins().settlePickup(need(c), Number(c.m[1])));
-      return { ...r, message: PICKUP_REASONS[r.reason] ?? '' };
-    }],
     // Public: an order's circuit evidence only (circuit, block, packed input and output) — no names, sellers or
     // accounts — so anyone can re-run eval and check the decision (scripts/verify-order.mjs).
     ['GET', /^\/api\/orders\/(\d+)\/evidence$/, async (c) => {
@@ -434,13 +393,6 @@ export function createApp(o: AppOptions): Server {
         paystackPayouts: !!o.payouts?.paystack, paystackTest: o.payouts?.paystack?.test ?? true,
       };
     }],
-    /** Coin pickups: the vault paid StockRun's payout wallet; the seller is owed that in naira from StockRun. */
-    ['GET', /^\/api\/admin\/coin-owed$/, async (c) => {
-      admin(c);
-      return (o.coins?.owedSellers() ?? []).map((r) => ({ vault: r.vault, orderId: r.order_id, seller: r.seller_name, sellerId: r.seller_id,
-        item: `${r.quantity} × ${r.item}`, owedNaira: r.seller_owed_naira, settleTx: r.settle_tx, createdAt: r.created_at }));
-    }],
-    ['POST', /^\/api\/admin\/coin-owed\/(0x[0-9a-fA-F]{40})\/(\d+)\/paid$/, async (c) => { admin(c); coins().markSellerPaid(c.m[1], Number(c.m[2])); return { ok: true }; }],
     ['GET', /^\/api\/admin\/orders$/, async (c) => {
       admin(c);
       return o.buyers.orders.recent(100).map((r) => ({

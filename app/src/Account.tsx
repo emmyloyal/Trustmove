@@ -1,21 +1,19 @@
-// StockRun for everyone: sign in with an email address or a wallet, keep a profile, deposit naira, and ask the agent
+// StockRun for everyone: sign in with an email address, keep a profile, deposit naira, and ask the agent
 // for what you want with a budget and a delivery pin. The agent finds sellers on the map, negotiates on WhatsApp and
 // pays the seller only once the logistics company (or you, collecting) has the goods.
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import {
-  walletSend, type CoinVault,
-  avatarUrl, currentPosition, hasWallet, load, naira, preparePhoto, save, server, serviceFee, short, signWithWallet, whatsappLink,
-  type Category, type Coins, type Config, type DealResult, type FoundSeller, type HuntResult, type Me, type MySeller, type PlaceHit, type SellerHit, type Movement, type Order, type Place, type RequestRecord, type Seller, type User,
+  avatarUrl, currentPosition, load, naira, preparePhoto, save, server, serviceFee, whatsappLink,
+  type Category, type Config, type DealResult, type FoundSeller, type HuntResult, type Me, type MySeller, type PlaceHit, type SellerHit, type Movement, type Order, type Place, type RequestRecord, type Seller, type User,
 } from './lib';
-import { CircuitTrail, Outcome, Sheet, StatusPill, Tx } from './ui';
+import { CircuitTrail, Outcome, Sheet, StatusPill } from './ui';
 import { Admin } from './Admin';
 import { WithdrawPanel } from './Banks';
 import { ChatsTab, MyStore } from './Store';
 import { FeedTab } from './Feed';
 import { Icon } from './icons';
-import { CoinWithdraw, CoinsPanel, depositCoins } from './Coins';
 
 type Tab = 'feed' | 'ask' | 'orders' | 'chats' | 'money' | 'me' | 'admin';
 /** The Route S mark: a solid dot at pickup, an open ring at the shop. Ink on light, danfo yellow on dark. */
@@ -84,7 +82,7 @@ export function AccountApp({ cfg }: { cfg: Config }) {
           {!u.username && tab !== 'me' && <button className="nudge" onClick={() => go('me')}><Icon.user size={18} /> Choose a username so sellers know who you are <Icon.chevron size={16} /></button>}
           {tab === 'chats' && cfg.chat && <ChatsTab openId={openChat} onOpened={() => setOpenChat(null)} />}
           {tab === 'ask' && <Ask onChat={startChat} cfg={cfg} user={u} me={me} onAsked={() => { reload(); go('orders'); }} goMoney={() => go('money')} />}
-          {tab === 'orders' && <Orders cfg={cfg} wallet={u.wallet} onChange={reload} goAsk={() => go('ask')} />}
+          {tab === 'orders' && <Orders cfg={cfg} onChange={reload} goAsk={() => go('ask')} />}
           {tab === 'money' && <Money cfg={cfg} me={me} onChange={reload} />}
           {tab === 'admin' && me.admin && <Admin />}
           {tab === 'me' && me.admin && <button className="nudge admin-link" onClick={() => go('admin')}><Icon.admin size={18} /> Admin: orders, payouts and stores <Icon.chevron size={16} /></button>}
@@ -106,9 +104,8 @@ export function AccountApp({ cfg }: { cfg: Config }) {
   );
 }
 
-// ---------------------------------------------------------------- sign in: email or wallet
+// ---------------------------------------------------------------- sign in: email
 function SignIn({ cfg, onDone }: { cfg: Config; onDone: () => void }) {
-  const [way, setWay] = useState<'email' | 'wallet'>(cfg.emailSignIn ? 'email' : 'wallet');
   const [email, setEmail] = useState('');
   const [code, setCode] = useState('');
   const [sent, setSent] = useState(false);
@@ -119,7 +116,6 @@ function SignIn({ cfg, onDone }: { cfg: Config; onDone: () => void }) {
   /** A new shop owner's account is marked as one right after signing in (existing shop owners stay shop owners). */
   const finish = async (u: { role?: string }) => { if (asShop && u.role !== 'shop') await server.setRole('shop'); onDone(); };
   const signIn = (c: string) => go('Signing in…', async () => { const r = await server.emailVerify(email, c); save('stockrun.signin', 'email'); await finish(r.user); });
-  const pick = (w: typeof way) => { setWay(w); setSent(false); setCode(''); setError(''); };
   const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email.trim());
 
   return (
@@ -136,7 +132,8 @@ function SignIn({ cfg, onDone }: { cfg: Config; onDone: () => void }) {
             <button role="radio" aria-checked={asShop} className={asShop ? 'on' : ''} onClick={() => setAsShop(true)}>I own a shop</button>
           </div>
         )}
-        {way === 'email' ? (<>
+        {!cfg.emailSignIn && <p className="warn">Sign-in is not switched on on this server yet.</p>}
+        {cfg.emailSignIn && (<>
           <label className="field"><span>Email</span>
             <input type="email" inputMode="email" autoComplete="email" placeholder="ada@gmail.com" value={email} onChange={(e) => setEmail(e.target.value)} disabled={sent} />
           </label>
@@ -154,21 +151,9 @@ function SignIn({ cfg, onDone }: { cfg: Config; onDone: () => void }) {
             <button className="btn primary" disabled={!!busy || code.length !== 6} onClick={() => signIn(code)}>Sign in</button>
             <button className="link center-link" disabled={!!busy} onClick={() => { setSent(false); setCode(''); }}>Use a different email</button>
           </>)}
-        </>) : (<>
-          <p className="fine">OKX Wallet or MetaMask. Signing is free and moves no money.</p>
-          {!hasWallet() && <p className="warn">No wallet found. Open StockRun in your wallet app's browser.</p>}
-          <button className="btn primary" disabled={!!busy || !hasWallet()} onClick={() => go('Waiting for your wallet…', async () => {
-            const s = await signWithWallet(async (a) => (await server.walletMessage(a)).message);
-            const r = await server.walletSignIn(s.message, s.signature); save('stockrun.signin', 'wallet'); await finish(r.user);
-          })}>Connect wallet</button>
         </>)}
         {busy && <p className="busy">{busy}</p>}
         {error && <p className="alert">{error}</p>}
-        {!sent && (cfg.emailSignIn
-          ? (way === 'email'
-            ? <><div className="or"><span>or</span></div><button className="btn ghost" onClick={() => pick('wallet')}><Icon.wallet size={18} /> Continue with a wallet</button></>
-            : <button className="link center-link" onClick={() => pick('email')}>Use email instead</button>)
-          : null)}
       </div>
       {cfg.supportEmail && <p className="fine support-line">Need help? <a href={supportMailto(cfg.supportEmail)}>{cfg.supportEmail}</a></p>}
     </section>
@@ -194,9 +179,7 @@ function Ask({ cfg, user, me, onAsked, goMoney, onChat }: { cfg: Config; user: U
   const markers = useRef(new Map<string, L.CircleMarker>());
   const [draft, setDraft] = useState<{ id: string; name: string; phone: string; message: string; ai: boolean } | null>(null);
   const contactPanel = useRef<HTMLDivElement>(null);
-  const [deal, setDeal] = useState<{ id: string; name: string; seller: MySeller | null; item: string; quantity: string; unit: string; price: string; category: Category; result: DealResult | null; note: string; pay: 'naira' | 'coins' } | null>(null);
-  /** The buyer's coin vault, when coins are on and set up: lets a deal be paid from it. */
-  const [coinVault, setCoinVault] = useState<CoinVault | null>(null);
+  const [deal, setDeal] = useState<{ id: string; name: string; seller: MySeller | null; item: string; quantity: string; unit: string; price: string; category: Category; result: DealResult | null; note: string } | null>(null);
   const dealPanel = useRef<HTMLDivElement>(null);
   const [reply, setReply] = useState('');
   const [showMap, setShowMap] = useState(false);
@@ -270,9 +253,7 @@ function Ask({ cfg, user, me, onAsked, goMoney, onChat }: { cfg: Config; user: U
   /** Record a deal agreed on WhatsApp: it becomes an order that RestockGuard decides, paid to the seller at pickup. */
   const openDeal = (id: string, name: string) => run(setBusy, setError, 'Checking your sellers…', async () => {
     const seller = await server.mySeller(id);
-    const v = cfg.coins && user.wallet ? (await server.coins().catch(() => null))?.vault ?? null : null;
-    setCoinVault(v);
-    setDeal({ id, name, seller, item: '', quantity: '1', unit: 'carton', price: '', category: 'staples', result: null, note: '', pay: 'naira' });
+    setDeal({ id, name, seller, item: '', quantity: '1', unit: 'carton', price: '', category: 'staples', result: null, note: '' });
     setTimeout(() => dealPanel.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50);
   });
   const dealRef = useRef(openDeal);
@@ -286,12 +267,6 @@ function Ask({ cfg, user, me, onAsked, goMoney, onChat }: { cfg: Config; user: U
     if (!Number.isInteger(qty) || qty < 1 || qty > 255) return 'Enter how many (1 to 255).';
     if (!(price >= 1)) return `Enter the agreed price per ${d.unit || 'unit'}.`;
     if (!pinned) return 'Type your delivery address and tap Find sellers first, so the distance can be checked.';
-    if (d.pay === 'coins') {
-      if (!coinVault) return 'Set up your coin vault in Money first.';
-      if (delivery === 'logistics') return 'Coin orders are collect-it-yourself for now. Choose "I\'ll collect".';
-      if (price * qty > coinVault.naira.free) return `This deal is ${naira(price * qty)}, but your vault has ${naira(coinVault.naira.free)} free. Add coins in Money first.`;
-      return '';
-    }
     if (delivery === 'logistics' && !user.phone && contact.replace(/\D/g, '').length < 10) return 'Add a phone number for the rider (under "How should it reach you?"), or choose to collect it yourself.';
     const total = price * qty + serviceFee(price * qty, cfg.naira.fee);
     if (total > available) return `This deal is ${naira(total)} with StockRun's fee, but your balance is ${naira(available)}. Deposit naira first.`;
@@ -303,20 +278,6 @@ function Ask({ cfg, user, me, onAsked, goMoney, onChat }: { cfg: Config; user: U
     if (problem) { setDeal({ ...deal, note: problem, result: null }); return; }
     setBusy('RestockGuard is checking your deal…');
     try {
-      if (deal.pay === 'coins') {
-        const d = { sellerId: deal.id, item: deal.item.trim(), quantity: Number(deal.quantity), unit: deal.unit.trim(), unitPriceNaira: Number(deal.price.replace(/\D/g, '')), category: deal.category, place };
-        let r = await server.coinDeal(d);
-        if (r.status === 'needs_seller') {
-          // The seller isn't in the vault yet: the buyer's wallet approves them (instant: paid through StockRun's payout wallet).
-          setBusy(`Approve ${r.seller.name} in your wallet…`);
-          await walletSend(cfg.coins!.chainId, user.wallet!, coinVault!.vault, 'queueSupplier', [r.seller.key, 1, r.payout]);
-          setBusy('RestockGuard is checking your deal…');
-          r = await server.coinDeal(d);
-        }
-        if (r.status === 'needs_seller') throw new Error(r.message);
-        setDeal({ ...deal, result: { status: r.status, orderId: r.orderId, reason: r.reason, message: r.message } as DealResult, note: '' });
-        return;
-      }
       const result = await server.recordDeal({ sellerId: deal.id, item: deal.item.trim(), quantity: Number(deal.quantity), unit: deal.unit.trim(), unitPriceNaira: Number(deal.price.replace(/\D/g, '')),
         category: deal.category, delivery, place, contactPhone: contact || undefined });
       setDeal({ ...deal, result, note: '' });
@@ -498,24 +459,7 @@ function Ask({ cfg, user, me, onAsked, goMoney, onChat }: { cfg: Config; user: U
                 {CATEGORY_LABELS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
               </select>
             </label>
-            {cfg.coins && coinVault && !deal.result && (
-              <div className="seg two" role="radiogroup" aria-label="Pay with">
-                <button role="radio" aria-checked={deal.pay === 'naira'} className={deal.pay === 'naira' ? 'on' : ''} onClick={() => setDeal({ ...deal, pay: 'naira', note: '' })}>Naira balance</button>
-                <button role="radio" aria-checked={deal.pay === 'coins'} className={deal.pay === 'coins' ? 'on' : ''} onClick={() => setDeal({ ...deal, pay: 'coins', note: '' })}>{cfg.coins.symbol} vault</button>
-              </div>
-            )}
-            {Number(deal.price.replace(/\D/g, '')) > 0 && Number(deal.quantity) > 0 && deal.pay === 'coins' && coinVault && (() => {
-              const goods = Number(deal.price.replace(/\D/g, '')) * Number(deal.quantity), dollars = goods * (cfg.coins!.cap / cfg.coins!.capNaira);
-              return (
-                <dl className="receipt">
-                  <div><dt>Goods</dt><dd>{naira(goods)}</dd></div>
-                  <div className="total"><dt>Locked in your vault</dt><dd>≈ ${dollars.toFixed(2)} {cfg.coins!.symbol}</dd></div>
-                  <div className="fine-row"><dt>Free in your vault</dt><dd>${coinVault.free.toFixed(2)} ≈ {naira(coinVault.naira.free)}</dd></div>
-                  <div className="fine-row"><dt>Collection</dt><dd>you collect · on-chain, signed in your wallet</dd></div>
-                </dl>
-              );
-            })()}
-            {Number(deal.price.replace(/\D/g, '')) > 0 && Number(deal.quantity) > 0 && deal.pay === 'naira' && (() => {
+            {Number(deal.price.replace(/\D/g, '')) > 0 && Number(deal.quantity) > 0 && (() => {
               const goods = Number(deal.price.replace(/\D/g, '')) * Number(deal.quantity), fee = serviceFee(goods, cfg.naira.fee);
               return (
                 <dl className="receipt">
@@ -590,7 +534,7 @@ function FoundList({ hunt, onContact, onDeal, onChat }: { hunt: HuntResult; onCo
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
 // ---------------------------------------------------------------- orders
-function Orders({ cfg, wallet, onChange, goAsk }: { cfg: Config; wallet: User['wallet']; onChange: () => void; goAsk: () => void }) {
+function Orders({ cfg, onChange, goAsk }: { cfg: Config; onChange: () => void; goAsk: () => void }) {
   const [orders, setOrders] = useState<Order[] | null>(null);
   const [requests, setRequests] = useState<RequestRecord[]>([]);
   const [counts, setCounts] = useState<Record<string, string>>({});
@@ -639,7 +583,6 @@ function Orders({ cfg, wallet, onChange, goAsk }: { cfg: Config; wallet: User['w
             <dl className="receipt compact">
               <div><dt>{naira(o.unitPriceNaira)} × {qty}{settled && qty < o.ordered ? ` of ${o.ordered}` : ''}</dt><dd>{naira(qty * o.unitPriceNaira)}</dd></div>
               {fee ? <div><dt>StockRun fee</dt><dd>{naira(fee)}</dd></div> : null}
-              {o.money === 'coins' && <div className="fine-row"><dt>Paid in</dt><dd>{o.tokenSymbol} from your vault · ${((o.unitPriceToken ?? 0) * qty).toFixed(2)}</dd></div>}
               <div className="total"><dt>{settled ? 'Paid' : o.status === 'Refunded' ? 'Refunded' : 'Locked'}</dt><dd>{naira(settled ? paid : total)}</dd></div>
               {settled && total - paid > 0 && <div className="fine-row"><dt>Came back to you</dt><dd>{naira(total - paid)}</dd></div>}
               {!o.self && <div className="fine-row"><dt>Delivery fee</dt><dd>{o.courierFeeNaira ? `${naira(o.courierFeeNaira)}, ` : ''}paid to {o.logistics?.carrierName ?? 'the courier'} directly</dd></div>}
@@ -650,9 +593,7 @@ function Orders({ cfg, wallet, onChange, goAsk }: { cfg: Config; wallet: User['w
         {o.status === 'AwaitingOwner' && (
           <div className="next">
             <p><strong>Needs your OK.</strong> <span className="fine">Approving never overrides a "no" from the circuit.</span></p>
-            <button className="btn primary" disabled={!!busy} onClick={() => act(o.money === 'coins' ? 'Approve in your wallet…' : 'Approving…', () => o.money === 'coins'
-              ? walletSend(cfg.coins!.chainId, wallet!, o.vault!, 'approveOrder', [BigInt(o.coinOrderId!)])
-              : server.approve(o.orderId))}>{o.money === 'coins' ? 'Approve in your wallet' : 'Approve'}</button>
+            <button className="btn primary" disabled={!!busy} onClick={() => act('Approving…', () => server.approve(o.orderId))}>Approve</button>
           </div>
         )}
         {o.self && o.status === 'Locked' && (
@@ -676,14 +617,7 @@ function Orders({ cfg, wallet, onChange, goAsk }: { cfg: Config; wallet: User['w
                   <p><strong>Approve {naira(n * o.unitPriceNaira)} for {o.supplier.name}?</strong> <span className="fine">For {n} {o.unit}{n === 1 ? '' : 's'}. This can't be undone, so only confirm once the goods are collected.</span></p>
                   <div className="row wrap">
                     <button className="btn primary grow" disabled={!!busy} onClick={() => act('PickupCheck is deciding…', async () => {
-                      const n = count(`p${o.orderId}`, o.ordered);
-                      if (o.money === 'coins') {
-                        // The count is the vault owner's: their wallet signs it, then PickupCheck pays through the vault.
-                        setBusy('Sign your count in your wallet…');
-                        await walletSend(cfg.coins!.chainId, wallet!, o.vault!, 'riderPickup', [BigInt(o.coinOrderId!), true, n]);
-                        setBusy('PickupCheck is deciding…');
-                        await server.coinSettlePickup(o.coinOrderId!);
-                      } else await server.collect(o.orderId, n);
+                      await server.collect(o.orderId, count(`p${o.orderId}`, o.ordered));
                       setConfirming(null);
                     })}>Yes, approve payment</button>
                     <button className="btn ghost" onClick={() => setConfirming(null)}>Not yet</button>
@@ -703,12 +637,7 @@ function Orders({ cfg, wallet, onChange, goAsk }: { cfg: Config; wallet: User['w
             </div>
           </div>
         )}
-        {o.money === 'coins' ? (
-          <div className="stack tight">
-            <p className="fine"><Icon.shield size={14} /> Decided by TapeOut circuits inside your vault on X Layer:</p>
-            {o.txs?.map((t) => <p key={t.hash} className="fine">{t.label}: <Tx hash={t.hash} /></p>)}
-          </div>
-        ) : <CircuitTrail evidence={o.evidence} network={cfg.network} orderId={o.orderId} />}
+        <CircuitTrail evidence={o.evidence} network={cfg.network} orderId={o.orderId} />
       </li>
     );
   };
@@ -757,25 +686,21 @@ function Logistics({ o }: { o: Order }) {
   );
 }
 
-// ---------------------------------------------------------------- money: naira (Paystack) and coins (wallet)
+// ---------------------------------------------------------------- money: naira (Paystack)
 function Money({ cfg, me, onChange }: { cfg: Config; me: Me; onChange: () => void }) {
   const [email, setEmail] = useState(() => load<string>('stockrun.email', ''));
   const [moves, setMoves] = useState<Movement[]>([]);
-  const [coins, setCoins] = useState<Coins | null>(null);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [note, setNote] = useState('');
   const [sheet, setSheet] = useState<null | 'amount' | 'pay' | 'withdraw'>(null);
-  const [withdrawWhat, setWithdrawWhat] = useState<'naira' | 'coins'>('naira');
   const [showAll, setShowAll] = useState(false);
   const [amount, setAmount] = useState(0);
   const [quote, setQuote] = useState<{ chargeNaira: number; totalNaira: number } | null>(null);
   useEffect(() => { if (sheet === 'pay' && amount > 0) server.depositQuote(amount).then(setQuote).catch(() => setQuote(null)); else setQuote(null); }, [sheet, amount]);
-  // Naira for people who signed in with email, dollars for people who signed in with a wallet.
-  const how = load<'phone' | 'email' | 'wallet' | ''>('stockrun.signin', '');
-  const currency: Currency = how === 'wallet' || (!how && !me.user?.phone && !me.user?.email && me.user?.wallet) ? 'usd' : 'ngn';
+  const currency: Currency = 'ngn';
   const close = useCallback(() => { setSheet(null); setError(''); }, []);
-  const refresh = useCallback(() => { server.history().then(setMoves).catch(() => {}); if (me.user?.wallet) server.coins().then(setCoins).catch(() => {}); }, [me.user?.wallet]);
+  const refresh = useCallback(() => { server.history().then(setMoves).catch(() => {}); }, []);
   useEffect(() => { refresh(); }, [refresh]);
   // Back from Paystack: confirm the payment (the server checks it with Paystack before crediting).
   useEffect(() => {
@@ -788,10 +713,8 @@ function Money({ cfg, me, onChange }: { cfg: Config; me: Me; onChange: () => voi
       onChange(); refresh();
     });
   }, []);  // eslint-disable-line react-hooks/exhaustive-deps
-  const walletDollars = Number(coins?.token?.amount ?? 0);
   const nairaOn = cfg.naira.paystack || cfg.naira.testCredit;
-  const vault = coins?.vault ?? null;
-  const max = currency === 'usd' ? Math.max(0, Math.min(Number.isFinite(walletDollars) ? walletDollars : 0, vault ? vault.room : Infinity)) : cfg.naira.paystack ? 0 : 500_000;
+  const max = cfg.naira.paystack ? 0 : 500_000;
 
   const MOVE: Record<string, [string, 'in' | 'out' | 'lock']> = {
     deposit: ['Deposit', 'in'], demo: ['Demo naira (not real money)', 'in'], hold: ['Locked for an order', 'lock'], release: ['Came back to you', 'in'],
@@ -807,13 +730,11 @@ function Money({ cfg, me, onChange }: { cfg: Config; me: Me; onChange: () => voi
         <span className="bc-sub"><Icon.lock size={14} /> {naira(me.naira?.heldNaira ?? 0)} locked in orders</span>
         <div className="bc-actions">
           <button className="btn danfo" disabled={!!busy} onClick={() => { setNote(''); setError(''); setSheet('amount'); }}><Icon.plus size={18} /> Add money</button>
-          {(cfg.withdrawals || (vault && me.user?.wallet)) && <button className="btn on-dark" onClick={() => {
-            setNote(''); setError(''); setWithdrawWhat(cfg.withdrawals && currency === 'ngn' ? 'naira' : vault ? 'coins' : 'naira'); setSheet('withdraw');
-          }}><Icon.arrowUp size={18} /> Withdraw</button>}
+          {cfg.withdrawals && <button className="btn on-dark" onClick={() => { setNote(''); setError(''); setSheet('withdraw'); }}><Icon.arrowUp size={18} /> Withdraw</button>}
         </div>
       </div>
       <p className="fine"><Icon.info size={14} /> Naira you add is held by StockRun in a ledger, not on-chain. Every payment from it is decided by a TapeOut circuit on X Layer.</p>
-      {currency === 'ngn' && !nairaOn && <p className="warn">Naira deposits are not switched on yet on this server.</p>}
+      {!nairaOn && <p className="warn">Naira deposits are not switched on yet on this server.</p>}
       {busy && !sheet && <p className="busy">{busy}</p>}
       {error && !sheet && <p className="alert">{error}</p>}
       {note && <p className="ok-box">{note}</p>}
@@ -835,24 +756,9 @@ function Money({ cfg, me, onChange }: { cfg: Config; me: Me; onChange: () => voi
         {moves.length > 8 && <button className="link" onClick={() => setShowAll((v) => !v)}>{showAll ? 'Show less' : `Show all ${moves.length}`}</button>}
       </section>
 
-      <section className="panel stack">
-        <div className="row between"><h2>Coins</h2><span className="pill muted">{cfg.coins ? `${cfg.coins.symbol} · X Layer` : 'Wallet'}</span></div>
-        <CoinsPanel cfg={cfg} me={me} coins={coins} onChange={refresh} />
-      </section>
-
       {sheet === 'withdraw' && (
-        <Sheet title={withdrawWhat === 'coins' ? 'Withdraw to your wallet' : 'Withdraw to your bank'} onClose={close}>
-          <div className="stack">
-            {cfg.withdrawals && vault && me.user?.wallet && (
-              <div className="seg two" role="radiogroup" aria-label="Withdraw">
-                <button role="radio" aria-checked={withdrawWhat === 'naira'} className={withdrawWhat === 'naira' ? 'on' : ''} onClick={() => setWithdrawWhat('naira')}>Naira → bank</button>
-                <button role="radio" aria-checked={withdrawWhat === 'coins'} className={withdrawWhat === 'coins' ? 'on' : ''} onClick={() => setWithdrawWhat('coins')}>{vault.symbol} → wallet</button>
-              </div>
-            )}
-            {withdrawWhat === 'coins' && vault && me.user?.wallet
-              ? <CoinWithdraw cfg={cfg} wallet={me.user.wallet} vault={vault} onDone={refresh} />
-              : <WithdrawPanel available={me.naira?.availableNaira ?? 0} onDone={() => { onChange(); refresh(); }} />}
-          </div>
+        <Sheet title="Withdraw to your bank" onClose={close}>
+          <WithdrawPanel available={me.naira?.availableNaira ?? 0} onDone={() => { onChange(); refresh(); }} />
         </Sheet>
       )}
 
@@ -862,26 +768,7 @@ function Money({ cfg, me, onChange }: { cfg: Config; me: Me; onChange: () => voi
       )}
       {sheet === 'pay' && (
         <Sheet title={`Add ${money(currency, amount)}`} onClose={close} onBack={() => setSheet('amount')}>
-          {currency === 'usd' ? (
-            <div className="stack">
-              {!cfg.coins ? (<>
-                <p>Paying with coins isn't switched on on this server. Nothing has been taken from your wallet.</p>
-                <button className="btn ghost" onClick={close}>Close</button>
-              </>) : !vault || !me.user?.wallet ? (<>
-                <p>Set up your coin vault first: it's under <strong>Coins</strong> on this page. StockRun creates it and pays that gas.</p>
-                <button className="btn ghost" onClick={close}>Close</button>
-              </>) : (<>
-                <p>{money(currency, amount)} of {vault.symbol} goes from your wallet into your own vault on X Layer. Your wallet asks you twice: once to allow it, once to deposit.</p>
-                <button className="btn primary" disabled={!!busy} onClick={() => run(setBusy, setError, 'Waiting for your wallet…', async () => {
-                  await depositCoins(cfg, me.user!.wallet!, vault.vault, amount, setBusy);
-                  setNote(`${money(currency, amount)} added to your vault.`); refresh(); close();
-                })}><Icon.lock size={18} /> Deposit {money(currency, amount)}</button>
-                <p className="fine">Your vault holds at most {money(currency, vault.cap)} for now (it's new and not yet audited).</p>
-                {busy && <p className="busy">{busy}</p>}
-                {error && <p className="alert">{error}</p>}
-              </>)}
-            </div>
-          ) : (
+          {(
             <div className="stack">
               {cfg.naira.testCredit && (
                 <div className="stack note">
@@ -975,7 +862,7 @@ function Profile({ user, bust, supportEmail, onChange }: { user: User; bust: num
   const [error, setError] = useState('');
   const [saved, setSaved] = useState('');
   const go = (label: string, f: () => Promise<void>) => { setSaved(''); return run(setBusy, setError, label, f); };
-  const handle = user.username ? `@${user.username}` : user.email ?? (user.wallet ? short(user.wallet) : '');
+  const handle = user.username ? `@${user.username}` : user.email ?? '';
 
   return (
     <div className="stack">
@@ -996,7 +883,7 @@ function Profile({ user, bust, supportEmail, onChange }: { user: User; bust: num
         <label className="field"><span>Username</span><input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="ada_lagos" maxLength={20} /></label>
         <label className="field"><span>Name</span><input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Ada Obi" maxLength={40} /></label>
         <button className="btn primary" disabled={!!busy} onClick={() => go('Saving…', async () => { await server.profile({ username: username.trim() || undefined, displayName }); onChange(); setSaved('Saved.'); })}>Save</button>
-        <p className="fine">Your username, name and picture are public. Your email and wallet are never shown to others.</p>
+        <p className="fine">Your username, name and picture are public. Your email is never shown to others.</p>
       </div>
       <div className="panel stack">
         <h2>Account type</h2>
@@ -1006,12 +893,8 @@ function Profile({ user, bust, supportEmail, onChange }: { user: User; bust: num
           : <button className="link" disabled={!!busy} onClick={() => go('Switching…', async () => { await server.setRole('buyer'); onChange(); setSaved('Switched to a buyer account.'); })}>Switch back to a buyer account</button>}
       </div>
       <div className="panel stack">
-        <h2>Sign-in methods</h2>
-        <p>Email: {user.email ?? 'not added'} · Wallet: {user.wallet ? short(user.wallet) : 'not connected'}</p>
-        {!user.wallet && <button className="btn ghost" disabled={!!busy || !hasWallet()} onClick={() => go('Waiting for your wallet…', async () => {
-          const s = await signWithWallet(async (a) => (await server.walletMessage(a)).message);
-          await server.addWallet(s.message, s.signature); onChange(); setSaved('Wallet connected.');
-        })}>{hasWallet() ? 'Connect a wallet' : 'No wallet in this browser'}</button>}
+        <h2>Sign-in</h2>
+        <p>Email: {user.email ?? 'not added'}</p>
       </div>
       {supportEmail && (
         <div className="panel stack">
@@ -1022,7 +905,7 @@ function Profile({ user, bust, supportEmail, onChange }: { user: User; bust: num
       )}
       <div className="panel stack">
         <h2>Log out</h2>
-        <p className="fine">Logs you out on this device. Your balance, orders and profile stay safe; log back in with your email or wallet.</p>
+        <p className="fine">Logs you out on this device. Your balance, orders and profile stay safe; log back in with your email.</p>
         <button className="btn danger" disabled={!!busy} onClick={() => go('Logging out…', async () => {
           await server.logout();
           save('stockrun.signin', '');
