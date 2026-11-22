@@ -1,0 +1,34 @@
+{
+  "name": "stockrun-agent",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p .",
+    "demo": "node src/demo.ts",
+    "live": "node src/live.ts",
+    "count": "node src/count.ts",
+    "app": "node src/server/demoServer.ts",
+    "rehearse:xlayer": "node src/rehearseXLayer.ts",
+    "rehearse:coins": "node src/rehearseCoins.ts",
+    "serve": "node src/server/main.ts",
+    "serve:xlayer": "node src/server/main.ts --network=xlayer",
+    "gmail:auth": "node src/accounts/gmailAuth.ts",
+    "carrier:try": "node src/logistics/tryCarrier.ts",
+    "deweb:publish": "node src/deweb/publish.ts",
+    "artifacts": "node -e \"const o=require('../contracts/out/StockRunVault.sol/StockRunVault.json');const c=require('../deployments/artifacts/StockRunVault.json');c.abi=o.abi;c.bytecode={object:o.bytecode.object};require('fs').writeFileSync('../deployments/artifacts/StockRunVault.json',JSON.stringify(c,null,1)+'\\n')\""
+  },
+  "dependencies": {
+    "@google/genai": "2.32.0",
+    "viem": "^2.58.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.9"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

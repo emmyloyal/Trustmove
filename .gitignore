@@ -1,0 +1,14 @@
+node_modules/
+.env
+contracts/out/
+contracts/cache/
+dist/
+.DS_Store
+# real supplier prices and jobs (pilot data)
+agent/data/prices.json
+agent/data/jobs.json
+contracts/broadcast/**/dry-run/
+.env.bak
+.env.*.bak
+contracts/broadcast/**/*.recovery.lock
+agent/data/stockrun.db*
